@@ -17,3 +17,46 @@ jobs:
       - run: npm install -g typescript
       - run: tsc
 
+  notify-devops-agent:
+    needs: build
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify AWS DevOps Agent
+        env:
+          WEBHOOK_URL: ${{ secrets.DEVOPS_AGENT_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.DEVOPS_AGENT_WEBHOOK_SECRET }}
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+          INCIDENT_ID="gh-${{ github.run_id }}-$(date +%s)"
+          
+          PAYLOAD=$(cat <<EOF
+          {
+            "eventType": "incident",
+            "incidentId": "$INCIDENT_ID",
+            "action": "created",
+            "priority": "HIGH",
+            "title": "CI pipeline failed: ${{ github.event.head_commit.message }}",
+            "description": "GitHub Actions workflow '${{ github.workflow }}' failed on branch ${{ github.ref_name }} in repo ${{ github.repository }}. Commit: ${{ github.sha }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "service": "${{ github.repository }}",
+            "timestamp": "$TIMESTAMP",
+            "data": {
+              "metadata": {
+                "repository": "${{ github.repository }}",
+                "branch": "${{ github.ref_name }}",
+                "commit_sha": "${{ github.sha }}",
+                "workflow_run_id": "${{ github.run_id }}",
+                "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }
+            }
+          }
+          EOF
+          )
+          
+          SIGNATURE=$(echo -n "${TIMESTAMP}:${PAYLOAD}" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary | base64)
+          
+          curl -s -o /dev/null -w "%{http_code}" -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-amzn-event-timestamp: $TIMESTAMP" \
+            -H "x-amzn-event-signature: $SIGNATURE" \
+            -d "$PAYLOAD"
