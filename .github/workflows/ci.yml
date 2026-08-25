@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install -g typescript
+      - run: tsc
+
+  notify-devops-agent:
+    needs: build
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify AWS DevOps Agent
+        run: |
+          curl -X POST "${{ secrets.DEVOPS_AGENT_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Webhook-Secret: ${{ secrets.DEVOPS_AGENT_WEBHOOK_SECRET }}" \
+            -d '{
+              "source": "github-actions",
+              "repository": "${{ github.repository }}",
+              "workflow_run_id": "${{ github.run_id }}",
+              "branch": "${{ github.ref_name }}",
+              "commit_sha": "${{ github.sha }}",
+              "failure_job": "build",
+              "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }'
